@@ -1,5 +1,6 @@
 #include "stdint.h"
-#include "time.h"
+#include "alarm_time.h"
+#include <time.h>
 #include <stdio.h>
 
 #define MAX_STATES 2
@@ -45,6 +46,7 @@ typedef enum {
 
 /* Main application structure */
 typedef struct {
+	struct tm ntp_time;
 	alarm_time_t curr_time;
 	alarm_time_t remaining_time;
 	state_t active_state;

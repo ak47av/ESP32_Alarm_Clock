@@ -7,10 +7,12 @@ void alarm_init(alarm_t *mobj){
     ee.sig = ENTRY;
     mobj->active_state = IDLE;
 
-    alarm_time_t zero_time = {.second=0, .minute=0, .hour=0};
+    alarm_time_t time_to_set = {.second=mobj->ntp_time.tm_sec, .minute=mobj->ntp_time.tm_min, .hour=mobj->ntp_time.tm_hour};
     alarm_time_t alarm_time = {.second=20, .minute=0, .hour=0};
-    mobj->curr_time = zero_time;
-    mobj->remaining_time = alarm_time; 
+
+
+    mobj->curr_time = time_to_set; // Must set NTP time
+    mobj->remaining_time = alarm_time; // set arbitrary time for now
     ehandler = (e_handler_t) mobj->state_table[IDLE * MAX_SIGNALS + ENTRY];
     (*ehandler)(mobj,&ee);
 }

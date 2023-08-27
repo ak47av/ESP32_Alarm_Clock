@@ -1,4 +1,4 @@
-#include "time.h"
+#include "alarm_time.h"
 #include <stdio.h> 
 
 /* This function increases the clock timer */
