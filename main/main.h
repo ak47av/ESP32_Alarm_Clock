@@ -8,6 +8,7 @@
 #include "freertos/event_groups.h"
 #include "driver/gpio.h"
 #include "ssd1306.h"
+#include "rotary_encoder.h"
 #include "esp_wifi.h"
 #include "esp_log.h"
 #include "esp_http_client.h"
@@ -21,9 +22,9 @@
 
 ////////////////////////// DEFINES ////////////////////
 #define MILLIS_PER_SECOND 100
-#define DEBOUNCE_DELAY_MS 100
+#define DEBOUNCE_DELAY_MS 200
 
-#define BUTTON_GPIO_PIN     GPIO_NUM_3 // Replace with the GPIO pin number you're using
+#define BUTTON_GPIO_PIN     GPIO_NUM_10 // Replace with the GPIO pin number you're using
 #define BUTTON_GPIO_PULL    GPIO_PULLUP_ONLY // Use GPIO_PULLDOWN_ONLY for active low buttons
 #define BUTTON_INTERRUPT_EDGE   GPIO_INTR_NEGEDGE // Use GPIO_INTR_NEGEDGE for falling edge
 
@@ -39,16 +40,31 @@
 #define EXAMPLE_ESP_WIFI_PASS      "password"
 #define EXAMPLE_ESP_MAXIMUM_RETRY  10
 
+// SNTP defines
 #define SNTP_MAXIMUM_RETRY 15
+
+// ROTARY ENCODER DEFINES
+#define ROT_ENC_A_GPIO 8
+#define ROT_ENC_B_GPIO 9
+
+#define ENABLE_HALF_STEPS false  // Set to true to enable tracking of rotary encoder at half step resolution
+#define RESET_AT          0      // Set to a positive non-zero number to reset the position if this value is exceeded
+#define FLIP_DIRECTION    false  // Set to true to reverse the clockwise/counterclockwise sense
 ////////////////////////// DEFINES ////////////////////
 
 ///////////////////////////// VARIABLES /////////////////////////
-static alarm_t alarm_clock;
+alarm_t alarm_clock;
+char menu_items[MENU_MAX_ITEMS][20] = {
+    "Set a new alarm",
+    "Delete an alarm",
+    "View all alarms"
+};
+// static menu_t menu;
 
-int32_t snooze_current_millis = 0;
-int32_t snooze_prev_millis = 0;
+int32_t button_current_millis = 0;
+int32_t button_prev_millis = 0;
+int button_flag = 0;
 
-int snooze_flag = 0;
 SSD1306_t dev;
    
 time_t now;
@@ -63,6 +79,9 @@ static const char *MQTT_TAG = "MQTT";
 static const char *MQTT_BROKER_URI = "mqtt://192.168.0.101:1883" ;
 
 static int s_retry_num = 0; // Counting the number of retries when connecting to Wi-Fi
+
+QueueHandle_t rotary_event_queue;
+rotary_encoder_info_t rotary_info = { 0 };
 ///////////////////////////// VARIABLES /////////////////////////
 
 ///////////////////////////// FUNCTIONS /////////////////////////
@@ -71,7 +90,9 @@ static int init_devices();
 static void event_dispatcher(alarm_t *const mobj, event_t const *const e);
 static void state_table_init(alarm_t *const mobj);
 static int32_t system_uptime(void);
-static void hit_snooze(void *arg);
+static void press_button(void *arg);
+
+// static void menu_init(alarm_t *const mobj);
 
 static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
 void wifi_init_sta(void);

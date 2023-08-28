@@ -1,6 +1,6 @@
 #include "main.h"
 
-#define ALARM_PROGRAM 0
+#define ALARM_PROGRAM 1
 
 void app_main(void)
 {
@@ -25,46 +25,69 @@ void app_main(void)
     uint32_t last_tick = system_uptime();
     tick_event_t te;
 
-    mqtt_app_start();
+    // mqtt_app_start();
 
+#if ALARM_PROGRAM
     while (1)
     {
-#if ALARM_PROGRAM
+        // Wait for incoming events on the event queue.
+        rotary_encoder_event_t event = {0};
+        if (xQueueReceive(rotary_event_queue, &event, 10 / portTICK_PERIOD_MS) == pdTRUE)
+        {
+            ESP_LOGI("Rotary encoder", "Event: position %ld, direction %s", event.state.position,
+                     event.state.direction ? (event.state.direction == ROTARY_ENCODER_DIRECTION_CLOCKWISE ? "CW" : "CCW") : "NOT_SET");
+            te.super.sig = SCROLL;
+            if(event.state.direction == ROTARY_ENCODER_DIRECTION_CLOCKWISE){
+                if(alarm_clock.selected_item < MENU_VIEW_ALARMS) alarm_clock.selected_item++;
+            } else {
+                if(alarm_clock.selected_item >= MENU_DELETE_ALARMS) alarm_clock.selected_item--;
+            }
+            event_dispatcher(&alarm_clock, &te.super);
+        }
         /* Dispatch a tick event every second */
-        if (system_uptime() - last_tick >= MILLIS_PER_SECOND) {
-        	// 100ms has passed; millis_per_second for testing quickly
-        	last_tick = system_uptime();
-        	te.super.sig = TIME_TICK;
-        	if (++te.ss > 10) {
-        		te.ss = 1;
-        	}
-        	event_dispatcher(&alarm_clock, &te.super);
+        if (system_uptime() - last_tick >= MILLIS_PER_SECOND)
+        {
+            // 100ms has passed; millis_per_second for testing quickly
+            last_tick = system_uptime();
+            te.super.sig = TIME_TICK;
+            if (++te.ss > 10)
+            {
+                te.ss = 1;
+            }
+            event_dispatcher(&alarm_clock, &te.super);
         }
 
         /* If the Snooze button ISR sets the flag to 1, this code block will run */
-        if (snooze_flag == 1) {
-           // Perform the lengthy operation here
-           te.super.sig = SNOOZE;
-           snooze_prev_millis = snooze_current_millis;
-           
-           // Release the mutex to allow the ISR to give it again
-           snooze_flag = 0;
-           alarm_time_t next_alarm = {.second=0, .minute=1, .hour=0};
-           alarm_clock.remaining_time = next_alarm; 
+        if (button_flag == 1)
+        {
+            te.super.sig = BUTTON;
+            button_prev_millis = button_current_millis;
 
-           event_dispatcher(&alarm_clock, &te.super);
+            // Release the mutex to allow the ISR to give it again
+            button_flag = 0;
+            if (alarm_clock.active_state == ALARM)
+            {
+                alarm_time_t next_alarm = {.second = 0, .minute = 1, .hour = 0};
+                alarm_clock.remaining_time = next_alarm;
+            }
+
+            event_dispatcher(&alarm_clock, &te.super);
+
         }
-#endif
     }
+#endif
+    ESP_LOGE(TAG, "queue receive failed");
+
+    ESP_ERROR_CHECK(rotary_encoder_uninit(&rotary_info));
 }
 
 /* Snooze ISR */
-static void IRAM_ATTR hit_snooze(void *arg)
+static void IRAM_ATTR press_button(void *arg)
 {
-    snooze_current_millis = system_uptime();
-    if ((snooze_current_millis - snooze_prev_millis > DEBOUNCE_DELAY_MS))
+    button_current_millis = system_uptime();
+    if ((button_current_millis - button_prev_millis > DEBOUNCE_DELAY_MS))
     {
-        snooze_flag = 1;
+        button_flag = 1;
     }
 }
 
@@ -83,25 +106,37 @@ static int init_devices()
 
     /* Configure interrupt for the snooze button */
     gpio_install_isr_service(0);
-    gpio_isr_handler_add(BUTTON_GPIO_PIN, hit_snooze, NULL);
+    gpio_isr_handler_add(BUTTON_GPIO_PIN, press_button, NULL);
 
     /* Configure SSD1306 128x64 I2C display */
     i2c_master_init(&dev, CONFIG_SDA_GPIO, CONFIG_SCL_GPIO, CONFIG_RESET_GPIO);
     ssd1306_init(&dev, 128, 64);
     ssd1306_clear_screen(&dev, false);
-	ssd1306_contrast(&dev, 0xff);
+    ssd1306_contrast(&dev, 0xff);
 
     /* Configure Wi-Fi */
-    esp_err_t ret = nvs_flash_init(); //Initialize NVS
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-      ESP_ERROR_CHECK(nvs_flash_erase());
-      ret = nvs_flash_init();
+    esp_err_t ret = nvs_flash_init(); // Initialize NVS
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
 
     ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
     wifi_init_sta();
 
+    // Initialise the rotary encoder device with the GPIOs for A and B signals
+    ESP_ERROR_CHECK(rotary_encoder_init(&rotary_info, ROT_ENC_A_GPIO, ROT_ENC_B_GPIO));
+    ESP_ERROR_CHECK(rotary_encoder_enable_half_steps(&rotary_info, ENABLE_HALF_STEPS));
+#ifdef FLIP_DIRECTION
+    ESP_ERROR_CHECK(rotary_encoder_flip_direction(&rotary_info));
+#endif
+
+    // Create a queue for events from the rotary encoder driver.
+    // Tasks can read from this queue to receive up to date position information.
+    rotary_event_queue = rotary_encoder_create_queue();
+    ESP_ERROR_CHECK(rotary_encoder_set_queue(&rotary_info, rotary_event_queue));
     return 0;
 }
 
@@ -109,12 +144,27 @@ static int init_devices()
 static void state_table_init(alarm_t *const mobj)
 {
     static e_handler_t state_table[MAX_STATES][MAX_SIGNALS] = {
-        [IDLE] = {NULL, IDLE_TIME_TICK, IDLE_ENTRY, IDLE_EXIT},
-        [ALARM] = {ALARM_SNOOZE, ALARM_TIME_TICK, ALARM_ENTRY, ALARM_EXIT},
+        [IDLE] = {IDLE_TIME_TICK, IDLE_BUTTON, NULL, IDLE_ENTRY, IDLE_EXIT},
+        [ALARM] = {ALARM_TIME_TICK, ALARM_BUTTON, NULL, ALARM_ENTRY, ALARM_EXIT},
+        [MENU] = {MENU_TIME_TICK, MENU_BUTTON, MENU_SCROLL, MENU_ENTRY, MENU_EXIT},
+        //[SET_ALARM] = {SET_ALARM_TIME_TICK, SET_ALARM_BUTTON, NULL, SET_ALARM_ENTRY, SET_ALARM_EXIT},
     };
 
     mobj->state_table = (uintptr_t *)&state_table[0][0];
 }
+
+// /* Menu initialization function*/
+// static void menu_init(alarm_t *const mobj)
+// {
+//     char items[MENU_MAX_ITEMS][20] = {"Set Alarm"};
+//     menu.selectedItem = MENU_SET_ALARM;
+//     for(int i=0; i<MENU_MAX_ITEMS; i++)
+//     {
+//         menu.menu_items[i] = items[i];
+//     }
+
+//     mobj->menu= &menu;
+// }
 
 /* This function dispatches events as per the state table */
 static void event_dispatcher(alarm_t *const mobj, event_t const *const e)
@@ -165,22 +215,30 @@ int32_t system_uptime(void)
     return uptimeMillis;
 }
 
-static void event_handler(void* arg, esp_event_base_t event_base,
-                                int32_t event_id, void* event_data)
+static void event_handler(void *arg, esp_event_base_t event_base,
+                          int32_t event_id, void *event_data)
 {
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START)
+    {
         esp_wifi_connect();
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        if (s_retry_num < EXAMPLE_ESP_MAXIMUM_RETRY) {
+    }
+    else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
+    {
+        if (s_retry_num < EXAMPLE_ESP_MAXIMUM_RETRY)
+        {
             esp_wifi_connect();
             s_retry_num++;
             ESP_LOGI(TAG, "retry to connect to the AP");
-        } else {
+        }
+        else
+        {
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
         }
-        ESP_LOGI(TAG,"connect to the AP fail");
-    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
+        ESP_LOGI(TAG, "connect to the AP fail");
+    }
+    else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
+    {
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
         s_retry_num = 0;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
@@ -218,46 +276,55 @@ void wifi_init_sta(void)
             .password = EXAMPLE_ESP_WIFI_PASS,
         },
     };
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
-    ESP_ERROR_CHECK(esp_wifi_start() );
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
 
     ESP_LOGI(TAG, "wifi_init_sta finished.");
 
     /* Waiting until either the connection is established (WIFI_CONNECTED_BIT) or connection failed for the maximum
      * number of re-tries (WIFI_FAIL_BIT). The bits are set by event_handler() (see above) */
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
-            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-            pdFALSE,
-            pdFALSE,
-            portMAX_DELAY);
+                                           WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+                                           pdFALSE,
+                                           pdFALSE,
+                                           portMAX_DELAY);
 
     /* xEventGroupWaitBits() returns the bits before the call returned, hence we can test which event actually
      * happened. */
-    if (bits & WIFI_CONNECTED_BIT) {
+    if (bits & WIFI_CONNECTED_BIT)
+    {
         ESP_LOGI(TAG, "connected to ap SSID:%s password:%s",
                  EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS);
-    } else if (bits & WIFI_FAIL_BIT) {
+    }
+    else if (bits & WIFI_FAIL_BIT)
+    {
         ESP_LOGI(TAG, "Failed to connect to SSID:%s, password:%s",
                  EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS);
-    } else {
+    }
+    else
+    {
         ESP_LOGE(TAG, "UNEXPECTED EVENT");
     }
 }
 
-static void obtain_time(void) {
+static void obtain_time(void)
+{
     ESP_LOGI(TAG, "Initializing SNTP");
 
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
     esp_sntp_setservername(0, "time.google.com"); // Replace with your preferred NTP server
     esp_sntp_init();
-    
+
+    ESP_LOGI(TAG, "SERVER_SET");
+
     // Wait for the system time to be set
     time_t now = 0;
     struct tm timeinfo;
     int retry = 0;
     const int retry_count = SNTP_MAXIMUM_RETRY;
-    while(timeinfo.tm_year < (2020 - 1900) && ++retry < retry_count) {
+    while (timeinfo.tm_year < (2020 - 1900) && ++retry < retry_count)
+    {
         ESP_LOGI(TAG, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
         print_message("SNTP init", 10, 3);
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -269,7 +336,7 @@ static void obtain_time(void) {
 void SNTP_initialize(void)
 {
     obtain_time();
-    
+
     // Set timezone to Indian Standard Time
     setenv("TZ", "IST-5:30", 1);
     tzset();
@@ -282,8 +349,7 @@ void SNTP_initialize(void)
 static void mqtt_app_start(void)
 {
     esp_mqtt_client_config_t mqtt_cfg = {
-        .broker.address.uri = MQTT_BROKER_URI
-    };
+        .broker.address.uri = MQTT_BROKER_URI};
 
     esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
     /* The last argument may be used to pass data to the event handler, in this example mqtt_event_handler */
@@ -297,7 +363,8 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     esp_mqtt_event_handle_t event = event_data;
     esp_mqtt_client_handle_t client = event->client;
     int msg_id;
-    switch ((esp_mqtt_event_id_t)event_id) {
+    switch ((esp_mqtt_event_id_t)event_id)
+    {
     case MQTT_EVENT_CONNECTED:
         ESP_LOGI(MQTT_TAG, "MQTT_EVENT_CONNECTED");
         msg_id = esp_mqtt_client_publish(client, "hello", "bunda maane", 0, 2, 0);
@@ -328,12 +395,12 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         break;
     case MQTT_EVENT_ERROR:
         ESP_LOGI(MQTT_TAG, "MQTT_EVENT_ERROR");
-        if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
+        if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT)
+        {
             log_error_if_nonzero("reported from esp-tls", event->error_handle->esp_tls_last_esp_err);
             log_error_if_nonzero("reported from tls stack", event->error_handle->esp_tls_stack_err);
-            log_error_if_nonzero("captured as transport's socket errno",  event->error_handle->esp_transport_sock_errno);
+            log_error_if_nonzero("captured as transport's socket errno", event->error_handle->esp_transport_sock_errno);
             ESP_LOGI(MQTT_TAG, "Last errno string (%s)", strerror(event->error_handle->esp_transport_sock_errno));
-
         }
         break;
     default:
@@ -344,7 +411,8 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
 static void log_error_if_nonzero(const char *message, int error_code)
 {
-    if (error_code != 0) {
+    if (error_code != 0)
+    {
         ESP_LOGE(MQTT_TAG, "Last error %s: 0x%x", message, error_code);
     }
 }
