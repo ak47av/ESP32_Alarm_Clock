@@ -61,6 +61,7 @@ typedef struct {
 	struct tm ntp_time;
 	alarm_time_t curr_time;
 	alarm_time_t remaining_time;
+    alarmNode *alarm_list;
 	state_t active_state;
 	uintptr_t *state_table;
 	menu_item_t selected_item;	
@@ -97,12 +98,12 @@ event_status_t MENU_ENTRY(alarm_t *const mobj, event_t const *const e);  // ENTR
 event_status_t MENU_EXIT(alarm_t *const mobj, event_t const *const e);   // EXIT handler
 event_status_t MENU_TIME_TICK(alarm_t *const mobj, event_t const *const e); // TIME_TICK Handler
 event_status_t MENU_BUTTON(alarm_t *const mobj, event_t const *const e); // TIME_TICK handler
-event_status_t MENU_SCROLL(alarm_t *const mobj, event_t const *const e)
+event_status_t MENU_SCROLL(alarm_t *const mobj, event_t const *const e);
 
 /* Event handlers for MENU State */
 event_status_t SET_ALARM_ENTRY(alarm_t *const mobj, event_t const *const e);  // ENTRY handler
 event_status_t SET_ALARM_EXIT(alarm_t *const mobj, event_t const *const e);   // EXIT handler
 event_status_t SET_ALARM_TIME_TICK(alarm_t *const mobj, event_t const *const e); // TIME_TICK Handler
 event_status_t SET_ALARM_BUTTON(alarm_t *const mobj, event_t const *const e); // TIME_TICK handler
-event_status_t SET_ALARM_SCROLL(alarm_t *const mobj, event_t const *const e)
+event_status_t SET_ALARM_SCROLL(alarm_t *const mobj, event_t const *const e);
 //////////////////////////// EVENT HANDLERS ///////////////////////////////

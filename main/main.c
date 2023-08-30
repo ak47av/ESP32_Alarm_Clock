@@ -27,6 +27,21 @@ void app_main(void)
 
     // mqtt_app_start();
 
+    alarm_time_t alarm1 = {10, 30, 22};
+    alarm_time_t alarm2 = {15, 45, 9};
+    alarm_time_t alarm3 = {0, 2, 18};
+    alarm_time_t alarm4 = {0, 0, 18};
+
+
+    // insert(&alarm_clock.alarm_list, alarm1);
+    // insert(&alarm_clock.alarm_list, alarm2);
+    insert(&alarm_clock.alarm_list, alarm3);
+    insert(&alarm_clock.alarm_list, alarm4);
+
+    printf("Alarm Times: ");
+    printList(alarm_clock.alarm_list);
+
+
 #if ALARM_PROGRAM
     while (1)
     {
@@ -79,6 +94,8 @@ void app_main(void)
     ESP_LOGE(TAG, "queue receive failed");
 
     ESP_ERROR_CHECK(rotary_encoder_uninit(&rotary_info));
+
+    freeList(alarm_clock.alarm_list);
 }
 
 /* Snooze ISR */
@@ -152,19 +169,6 @@ static void state_table_init(alarm_t *const mobj)
 
     mobj->state_table = (uintptr_t *)&state_table[0][0];
 }
-
-// /* Menu initialization function*/
-// static void menu_init(alarm_t *const mobj)
-// {
-//     char items[MENU_MAX_ITEMS][20] = {"Set Alarm"};
-//     menu.selectedItem = MENU_SET_ALARM;
-//     for(int i=0; i<MENU_MAX_ITEMS; i++)
-//     {
-//         menu.menu_items[i] = items[i];
-//     }
-
-//     mobj->menu= &menu;
-// }
 
 /* This function dispatches events as per the state table */
 static void event_dispatcher(alarm_t *const mobj, event_t const *const e)
@@ -323,6 +327,7 @@ static void obtain_time(void)
     struct tm timeinfo;
     int retry = 0;
     const int retry_count = SNTP_MAXIMUM_RETRY;
+    ESP_LOGI(TAG, "Entering SNTP time set loop");
     while (timeinfo.tm_year < (2020 - 1900) && ++retry < retry_count)
     {
         ESP_LOGI(TAG, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
@@ -330,6 +335,11 @@ static void obtain_time(void)
         vTaskDelay(pdMS_TO_TICKS(1000));
         time(&now);
         localtime_r(&now, &timeinfo);
+    }
+    if (timeinfo.tm_year < (2020 - 1900)) {
+        ESP_LOGE(TAG, "Failed to get network time.");
+    } else {
+        ESP_LOGI(TAG, "Network time obtained successfully.");
     }
 }
 

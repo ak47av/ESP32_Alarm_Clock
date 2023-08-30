@@ -59,7 +59,6 @@ char menu_items[MENU_MAX_ITEMS][20] = {
     "Delete an alarm",
     "View all alarms"
 };
-// static menu_t menu;
 
 int32_t button_current_millis = 0;
 int32_t button_prev_millis = 0;

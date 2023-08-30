@@ -8,8 +8,9 @@ void alarm_init(alarm_t *mobj){
     mobj->active_state = IDLE;
 
     alarm_time_t time_to_set = {.second=mobj->ntp_time.tm_sec, .minute=mobj->ntp_time.tm_min, .hour=mobj->ntp_time.tm_hour};
-    alarm_time_t alarm_time = {.second=20, .minute=0, .hour=0};
+    alarm_time_t alarm_time = {.second=10, .minute=1, .hour=0};
 
+    mobj->alarm_list = NULL;
 
     mobj->curr_time = time_to_set; // Must set NTP time
     mobj->remaining_time = alarm_time; // set arbitrary time for now
@@ -45,16 +46,18 @@ event_status_t IDLE_TIME_TICK(alarm_t *const mobj, event_t const *const e)
     if( ((tick_event_t *)(e))->ss == 10){
         increase_time(&mobj->curr_time);
         decrease_time(&mobj->remaining_time);
-        if(is_zero(&mobj->remaining_time))
+        char *alarm_buf = calloc(50, sizeof(char));
+        if(is_equal(mobj->curr_time, mobj->alarm_list->alarm)==0) // CRASHING HERE as  there is no next alarm when the alarms are exhausted
         {
             mobj->active_state = ALARM;
+            removeFirst(&mobj->alarm_list);
+            printList(mobj->alarm_list);
             return EVENT_TRANSITION;
         }
         display_time(&mobj->curr_time);
-        char *alarm_buf = calloc(20, sizeof(char));
         sprintf(alarm_buf, "Alarm: %02d:%02d:%02d", mobj->remaining_time.hour, mobj->remaining_time.minute, mobj->remaining_time.second);
         print_message(alarm_buf, 24, 3);
-        free(alarm_buf);
+        // free(alarm_buf);
         return EVENT_HANDLED;
     }
     return EVENT_IGNORED;
